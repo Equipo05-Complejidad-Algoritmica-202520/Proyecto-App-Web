@@ -1,0 +1,2 @@
+# Archivo vacío para mantener la carpeta data/ en git
+touch backend/data/.gitkeep

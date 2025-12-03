@@ -2,7 +2,8 @@
 import pandas as pd
 import os
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "grifos_geocoded.csv")
+# Ruta al archivo CSV de datos
+DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "grifos_costa_peruana.csv")
 
 # Carga y limpia TODO lo que pueda causar NaN
 df = pd.read_csv(DATA_PATH, sep=",")

@@ -1,66 +1,83 @@
-// frontend/src/App.jsx
+// frontend/src/App.jsx (versión final – copia y pega)
+
 import { useState } from 'react';
-import SearchBox from './components/SearchBox';
-import RouteResult from './components/RouteResult';
 import Map from './components/Map';
+import RouteResult from './components/RouteResult';
 
 function App() {
-  const [origen, setOrigen] = useState(null);
-  const [destino, setDestino] = useState(null);
-  const [ruta, setRuta] = useState(null);
+  const [userLocation, setUserLocation] = useState(null);
+  const [rutaCercana, setRutaCercana] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const buscarRuta = async () => {
-    if (!origen || !destino) return;
+  const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
+  const buscarGrifoCercano = async () => {
+    if (!userLocation) {
+      alert("Haz clic en el mapa para seleccionar tu ubicación");
+      return;
+    }
+
     setLoading(true);
-    const res = await fetch(
-      `http://localhost:8000/ruta?start=${origen.id}&end=${destino.id}`
-    );
-    const data = await res.json();
-    setRuta(data);
-    setLoading(false);
+    try {
+      const res = await fetch(
+        `${API_URL}/grifo_cercano?lat=${userLocation.lat}&lng=${userLocation.lng}`
+      );
+      const data = await res.json();
+      setRutaCercana(data);
+    } catch (err) {
+      alert("Error de conexión con el servidor");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-cyan-100">
-      <div className="container mx-auto p-6">
-        <h1 className="text-5xl font-bold text-center mb-2 text-indigo-800">
+      <div className="container mx-auto p-6 max-w-7xl">
+        <h1 className="text-5xl font-bold text-center mb-3 text-indigo-800">
           GrifoRuta Perú
         </h1>
-        <p className="text-center text-gray-700 mb-8 text-lg">
-          Ruta óptima entre estaciones de servicio usando Dijkstra + OSRM
+        <p className="text-center text-xl text-gray-700 mb-10">
+          Haz clic en el mapa → Encuentra el grifo más cercano por carretera real
         </p>
 
-        <div className="max-w-5xl mx-auto bg-white rounded-2xl shadow-2xl p-8">
-          {/* Buscadores */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-            <SearchBox label="Origen" onSelect={setOrigen} selected={origen} />
-            <SearchBox label="Destino" onSelect={setDestino} selected={destino} />
-          </div>
-
-          {/* Botón centrado */}
-          <div className="text-center mb-10">
+        <div className="bg-white rounded-3xl shadow-2xl overflow-hidden">
+          {/* Botón grande */}
+          <div className="p-8 text-center bg-gradient-to-r from-amber-500 to-orange-600">
             <button
-              onClick={buscarRuta}
-              disabled={!origen || !destino || loading}
-              className="px-12 py-5 bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold text-xl rounded-full shadow-2xl hover:shadow-3xl transform hover:scale-105 transition disabled:opacity-50"
+              onClick={buscarGrifoCercano}
+              disabled={loading || !userLocation}
+              className="px-16 py-7 bg-white text-amber-700 font-black text-3xl rounded-full shadow-2xl hover:shadow-3xl transform hover:scale-105 transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {loading ? "Calculando ruta real..." : "Buscar Ruta Más Corta"}
+              {loading ? "Buscando el grifo más cercano..." : "Buscar Grifo Más Cercano"}
             </button>
           </div>
 
-          {/* MAPA SIEMPRE VISIBLE (grafo completo) */}
-          <div className="mb-10">
-            <Map ruta={ruta} /> {/* ← AQUÍ ESTÁ EL SECRETO */}
-          </div>
-
-          {/* Resultado solo cuando hay ruta */}
-          {ruta && (
-            <div className="mt-10">
-              <RouteResult ruta={ruta} />
+          {/* Info de ubicación seleccionada */}
+          {userLocation && (
+            <div className="p-4 bg-green-100 text-center font-medium">
+              Ubicación seleccionada: {userLocation.lat.toFixed(5)}, {userLocation.lng.toFixed(5)}
+              <button
+                onClick={() => setUserLocation(null) || setRutaCercana(null)}
+                className="ml-4 text-red-600 underline"
+              >
+                Cambiar
+              </button>
             </div>
           )}
+
+          {/* Mapa */}
+          <Map userLocation={userLocation} setUserLocation={setUserLocation} rutaCercana={rutaCercana} />
+
+          {/* Resumen debajo del mapa (¡igual que antes!) */}
+          <div className="p-8">
+            <RouteResult ruta={rutaCercana} />
+          </div>
         </div>
+
+        <p className="text-center text-gray-500 mt-8 text-sm">
+          Grafo nacional real • Dijkstra + OSRM • 2025
+        </p>
       </div>
     </div>
   );

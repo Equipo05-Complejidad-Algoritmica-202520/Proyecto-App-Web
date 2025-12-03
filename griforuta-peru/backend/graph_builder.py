@@ -15,6 +15,36 @@ MAX_WORKERS = 15
 TIMEOUT = 15
 RETRY_ATTEMPTS = 2
 EXTENDED_RANGE_MULTIPLIER = 1.5
+GRAPH_FILE = "data/graph_real.json"
+USE_INCREMENTAL = False  # Activar para reutilizar aristas existentes
+
+
+def load_existing_graph():
+    """Carga el grafo existente y crea un índice de aristas"""
+    if not os.path.exists(GRAPH_FILE):
+        print("No se encontró grafo existente. Se creará desde cero.")
+        return [], set()
+
+    try:
+        with open(GRAPH_FILE, "r", encoding="utf-8") as f:
+            edges = json.load(f)
+
+        # Crear índice de pares existentes (bidireccional)
+        existing_pairs = set()
+        for edge in edges:
+            from_id = edge["from"]
+            to_id = edge["to"]
+            # Guardar ambas direcciones ya que (i,j) = (j,i)
+            existing_pairs.add((min(from_id, to_id), max(from_id, to_id)))
+
+        print(f"✓ Grafo existente cargado: {len(edges)} aristas")
+        print(f"✓ Pares únicos existentes: {len(existing_pairs)}")
+        return edges, existing_pairs
+
+    except Exception as e:
+        print(f"⚠ Error al cargar grafo existente: {e}")
+        print("Se creará desde cero.")
+        return [], set()
 
 
 def get_route_between(pair, attempt=1):
@@ -170,7 +200,20 @@ def connect_isolated_components(edges, components):
 
 
 def build_real_graph():
+    print("="*70)
+    if USE_INCREMENTAL:
+        print("🚀 MODO INCREMENTAL: Reutilizando aristas existentes")
+    else:
+        print("🔨 MODO COMPLETO: Creando grafo desde cero")
+    print("="*70)
     print(f"Construyendo grafo real con OSRM (max {MAX_DISTANCE_KM} km)...")
+
+    # PASO 1: Cargar grafo existente (si modo incremental activado)
+    existing_edges = []
+    existing_pairs = set()
+
+    if USE_INCREMENTAL:
+        existing_edges, existing_pairs = load_existing_graph()
 
     # Optimización K-Nearest Neighbors
     # En lugar de todos contra todos, buscamos solo los K vecinos más cercanos
@@ -212,45 +255,83 @@ def build_real_graph():
                 pair = tuple(sorted((i, j)))
                 pairs.add(pair)
 
-    pairs = list(pairs)
+    # PASO 2: Filtrar pares que ya existen
+    new_pairs = []
+    if USE_INCREMENTAL and existing_pairs:
+        for i, j in pairs:
+            id_i = stations[i]["id"]
+            id_j = stations[j]["id"]
+            pair_key = (min(id_i, id_j), max(id_i, id_j))
+
+            if pair_key not in existing_pairs:
+                new_pairs.append((i, j))
+
+        print(f"\n📊 Estadísticas de optimización:")
+        print(f"  • Total de pares candidatos: {len(pairs)}")
+        print(f"  • Pares ya existentes reutilizados: {len(pairs) - len(new_pairs)}")
+        print(f"  • Pares NUEVOS a consultar: {len(new_pairs)}")
+        print(f"  • Tiempo ahorrado: ~{(len(pairs) - len(new_pairs)) * 0.3 / 60:.1f} minutos")
+
+        pairs_to_query = new_pairs
+    else:
+        pairs_to_query = list(pairs)
+        print(f"{len(pairs_to_query)} pares optimizados dentro del rango.")
+
     # Fin optimización
 
-    print(f"{len(pairs)} pares optimizados dentro del rango. Iniciando descarga...")
+    print(f"Iniciando descarga de {len(pairs_to_query)} rutas nuevas...")
 
     edges = []
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(get_route_between, pair): pair for pair in pairs}
-        for future in as_completed(futures):
-            result = future.result()
-            if result:
-                edges.append(result)
+    if pairs_to_query:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {executor.submit(get_route_between, pair): pair for pair in pairs_to_query}
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    edges.append(result)
 
-    print(f"\nPrimera fase: {len(edges)} aristas creadas")
+    print(f"\nPrimera fase: {len(edges)} aristas nuevas creadas")
+
+    # PASO 3: Combinar aristas existentes y nuevas
+    if USE_INCREMENTAL:
+        all_edges = existing_edges + edges
+        print(f"Total con aristas reutilizadas: {len(all_edges)} aristas")
+    else:
+        all_edges = edges
 
     # Analizar componentes
-    components, never_connected = find_connected_components(edges)
+    components, never_connected = find_connected_components(all_edges)
 
     if len(components) > 1:
         print(f"\nSe encontraron {len(components)} componentes separados")
-        new_edges = connect_isolated_components(edges, components)
-        edges.extend(new_edges)
+        new_edges = connect_isolated_components(all_edges, components)
+        all_edges.extend(new_edges)
         print(f"\n{len(new_edges)} nuevas conexiones agregadas")
 
         # Verificar nuevamente
-        components, never_connected = find_connected_components(edges)
+        components, never_connected = find_connected_components(all_edges)
         print(f"\nComponentes finales: {len(components)}")
 
     if never_connected:
         print(f"\nAdvertencia: {len(never_connected)} nodos sin conexion por calles")
 
     # Guardar
-    with open("data/graph_real.json", "w", encoding="utf-8") as f:
-        json.dump(edges, f, ensure_ascii=False, indent=2)
+    with open(GRAPH_FILE, "w", encoding="utf-8") as f:
+        json.dump(all_edges, f, ensure_ascii=False, indent=2)
 
-    connected_nodes = len(set(e['from'] for e in edges) | set(e['to'] for e in edges))
-    print(f"\nGrafo construido: {len(edges)} aristas")
-    print(f"Nodos conectados: {connected_nodes}/{len(stations)}")
-    print("Guardado en data/graph_real.json")
+    connected_nodes = len(set(e['from'] for e in all_edges) | set(e['to'] for e in all_edges))
+
+    print("\n" + "="*70)
+    if USE_INCREMENTAL:
+        print("✅ GRAFO ACTUALIZADO (MODO INCREMENTAL)")
+        print(f"  • Aristas reutilizadas: {len(existing_edges)}")
+        print(f"  • Aristas nuevas: {len(all_edges) - len(existing_edges)}")
+    else:
+        print("✅ GRAFO CREADO (MODO COMPLETO)")
+    print(f"  • Total de aristas: {len(all_edges)}")
+    print(f"  • Nodos conectados: {connected_nodes}/{len(stations)}")
+    print(f"  • Archivo: {GRAPH_FILE}")
+    print("="*70)
 
 
 if __name__ == "__main__":

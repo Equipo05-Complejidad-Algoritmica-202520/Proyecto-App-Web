@@ -1,18 +1,23 @@
 # backend/main.py
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 import json
 import os
 from database import get_station_by_name_partial, get_station_by_id, get_all_stations
 from algorithms import dijkstra
+from fastapi.responses import FileResponse
+from pathlib import Path
+
 
 app = FastAPI()
 
 # CORS (para que el frontend funcione)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+    "https://grifos-peru-api.onrender.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -54,7 +59,8 @@ def ruta(start: int, end: int):
 
     # Usar OSRM para ruta real entre todos los puntos de la ruta
     coords = ";".join([f"{s['lng']},{s['lat']}" for s in ruta_estaciones])
-    osrm_url = f"http://router.project-osrm.org/route/v1/driving/{coords}?overview=full&geometries=geojson"
+    osrm_url = (f"http://router.project-osrm.org/route/v1/driving/{coords}?overview="
+                f"full&geometries=geojson")
 
     try:
         import requests
@@ -93,3 +99,85 @@ def get_graph():
 @app.get("/grifos")
 def get_all_grifos():
     return {"grifos": get_all_stations()}
+
+@app.get("/grifo_cercano")
+def grifo_cercano(lat: float, lng: float):
+    from geopy.distance import geodesic
+    from database import get_all_stations
+    import requests
+    import time
+
+    user_coord = (lat, lng)
+    stations = get_all_stations()
+
+    # 1. Filtrar candidatos cercanos en línea recta (rápido)
+    candidatos = []
+    for s in stations:
+        dist = geodesic(user_coord, (s['lat'], s['lng'])).kilometers
+        if dist < 50:  # Solo grifos a menos de 50 km en línea recta
+            candidatos.append((dist, s))
+
+    if not candidatos:
+        return {"error": "No hay grifos a menos de 50 km"}
+
+    # Ordenar por distancia aérea
+    candidatos.sort(key=lambda x: x[0])
+    candidatos = candidatos[:10]  # Tomar solo los 10 más cercanos
+
+    best_grifo = None
+    best_distance = float('inf')
+    best_polyline = None
+    best_duration = 0
+
+    print(f"Probando {len(candidatos)} candidatos cercanos...")
+
+    for _, station in candidatos:
+        coords = f"{lng},{lat};{station['lng']},{station['lat']}"
+        url = (f"http://router.project-osrm.org/route/v1/driving/{coords}?overview="
+               f"full&geometries=geojson")
+
+        try:
+            r = requests.get(url, timeout=8)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("routes"):
+                    route = data["routes"][0]
+                    dist_km = route["distance"] / 1000
+                    if dist_km < best_distance:
+                        best_distance = dist_km
+                        best_grifo = station
+                        best_polyline = [[c[1], c[0]] for c in route["geometry"]["coordinates"]]
+                        best_duration = round(route["duration"] / 60)
+                    # Salir temprano si ya encontramos uno muy bueno
+                    if dist_km < 2:
+                        break
+        except:
+            continue
+
+    if not best_grifo:
+        return {"error": "No se encontró ruta por carretera a ningún grifo cercano"}
+
+    return {
+        "origen": {"lat": lat, "lng": lng},
+        "destino": best_grifo,
+        "distancia_km": round(best_distance, 2),
+        "duracion_estimada_min": best_duration,
+        "polyline": best_polyline
+    }
+
+
+# ... tu código existente ...
+
+@app.get("/graph/simplified")
+async def get_simplified_graph():
+    """Servir grafo simplificado en formato GeoJSON"""
+    geojson_path = Path(__file__).parent / "data" / "graph_simplified.geojson"
+
+    if not geojson_path.exists():
+        return {"error": "Grafo no generado"}
+
+    return FileResponse(
+        path=geojson_path,
+        media_type="application/geo+json",
+        headers={"Cache-Control": "public, max-age=86400"}  # Cache de 24h
+    )

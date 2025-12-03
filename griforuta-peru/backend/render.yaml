@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: griforuta-backend
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: ./backend
+    envVars:
+      - key: PORT
+        value: 8000
