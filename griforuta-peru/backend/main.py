@@ -181,3 +181,14 @@ async def get_simplified_graph():
         media_type="application/geo+json",
         headers={"Cache-Control": "public, max-age=86400"}  # Cache de 24h
     )
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 10000))  # Render usa $PORT o 10000 por default
+    uvicorn.run(
+        "main:app", 
+        host="0.0.0.0",  # Obligatorio para Render
+        port=port, 
+        log_level="info",
+        reload=False  # Desactiva reload en producción
+    )
